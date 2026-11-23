@@ -1,0 +1,53 @@
+name: build
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  dmg:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions-rust-lang/setup-rust-toolchain@v2
+        with:
+          target: aarch64-apple-darwin,x86_64-apple-darwin
+      - name: Test
+        run: cargo test
+      - name: Build dmg
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then export VERSION="${GITHUB_REF#refs/tags/v}"; fi
+          ./packaging/build-dmg.sh
+        env:
+          MACOS_CERT_P12: ${{ secrets.MACOS_CERT_P12 }}
+          MACOS_CERT_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
+      - name: Smoke test
+        run: target/pkgroot/usr/local/libexec/mac-action-agent --version
+      - uses: actions/upload-artifact@v7
+        with:
+          name: mac-action-agent-dmg
+          path: target/*.dmg
+      - name: Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" target/*.dmg --title "mac-action-agent ${GITHUB_REF_NAME#v}" --generate-notes
+      # main is protected, so the cask bump goes through a PR.
+      - name: Bump Homebrew cask
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          SHA=$(shasum -a 256 "target/mac-action-agent-$VERSION.dmg" | cut -d' ' -f1)
+          git fetch origin main && git checkout -B "cask-$VERSION" origin/main
+          sed -i '' -e "s/^  version \".*\"/  version \"$VERSION\"/" -e "s/^  sha256 \".*\"/  sha256 \"$SHA\"/" Casks/mac-action-agent.rb
+          git -c user.name=github-actions -c user.email=github-actions@users.noreply.github.com commit -am "Cask: mac-action-agent $VERSION"
+          git push -f origin "cask-$VERSION"
+          gh pr create --base main --head "cask-$VERSION" --title "Cask: mac-action-agent $VERSION" --body "Bumps the Homebrew cask to the $GITHUB_REF_NAME release."

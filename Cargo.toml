@@ -1,0 +1,16 @@
+[package]
+name = "mac-action-agent"
+version = "0.1.0"
+edition = "2024"
+description = "macOS LaunchAgent that runs shell commands streamed over a private-network socket"
+
+[dependencies]
+
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+log = "0.4"
+env_logger = { version = "0.11", default-features = false, features = ["humantime"] }
+
+[profile.release]
+strip = true
+lto = true

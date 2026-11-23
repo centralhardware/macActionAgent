@@ -1,0 +1,12 @@
+#!/bin/sh
+PLIST=/Library/LaunchAgents/me.centralhardware.mac-action-agent.plist
+LOG=/Users/Shared/mac-action-agent.log
+
+/usr/sbin/chown root:wheel "$PLIST" /usr/local/libexec/mac-action-agent
+/bin/chmod 644 "$PLIST"
+touch "$LOG" && /bin/chmod 666 "$LOG"
+
+CONSOLE_USER=$(/usr/bin/stat -f %Su /dev/console)
+[ -n "$CONSOLE_USER" ] && [ "$CONSOLE_USER" != "root" ] || exit 0
+/bin/launchctl bootstrap "gui/$(/usr/bin/id -u "$CONSOLE_USER")" "$PLIST"
+exit 0

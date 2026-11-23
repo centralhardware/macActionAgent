@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>me.centralhardware.mac-action-agent</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/local/libexec/mac-action-agent</string>
+    </array>
+    <!-- In the logged-in GUI session, so commands can use osascript, open, pbcopy, screencapture. -->
+    <key>LimitLoadToSessionType</key>
+    <string>Aqua</string>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>ThrottleInterval</key>
+    <integer>10</integer>
+    <key>ProcessType</key>
+    <string>Standard</string>
+    <key>StandardOutPath</key>
+    <string>/Users/Shared/mac-action-agent.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/Shared/mac-action-agent.log</string>
+</dict>
+</plist>
