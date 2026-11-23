@@ -99,6 +99,8 @@ pub enum ClientFrame {
 #[derive(Debug, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "t", rename_all = "lowercase")]
 pub enum AgentFrame {
+    /// Waiting for the user to allow the command on the Mac.
+    Pending,
     Start { pid: u32 },
     Out { d: String },
     Err { d: String },
@@ -148,8 +150,12 @@ fn pump(mut r: impl Read, sink: Sink, err: bool) {
     }
 }
 
-/// Serves one connection: request line in, frames out, until the command exits.
-pub fn serve(stream: TcpStream) {
+/// Asks whether a request may run; true = allowed. Called once per command.
+pub type Confirm = dyn Fn(&RunRequest, Option<IpAddr>) -> bool + Send + Sync;
+
+/// Serves one connection: request line in, confirmation, frames out until the command exits.
+pub fn serve(stream: TcpStream, confirm: Arc<Confirm>) {
+    let peer = stream.peer_addr().ok().map(|a| a.ip());
     let sink: Sink = Arc::new(Mutex::new(match stream.try_clone() {
         Ok(s) => s,
         Err(_) => return,
@@ -166,6 +172,12 @@ pub fn serve(stream: TcpStream) {
             return;
         }
     };
+    send(&sink, &AgentFrame::Pending);
+    if !confirm(&req, peer) {
+        log::info!("denied: {}", req.cmd);
+        send(&sink, &AgentFrame::Error { message: "denied by user".into() });
+        return;
+    }
     log::info!("run: {}", req.cmd);
 
     let shell = req.shell.clone().or_else(|| std::env::var("MAA_SHELL").ok()).unwrap_or_else(|| "/bin/zsh".into());
@@ -268,4 +280,18 @@ fn kill_group(pgid: u32) {
     unsafe {
         kill(-(pgid as i32), 9);
     }
+}
+
+/// IPv4 addresses from `ifconfig` output (`inet 10.8.0.4 --> 10.8.0.1 netmask …`).
+pub fn ifconfig_addrs(text: &str) -> Vec<IpAddr> {
+    text.lines()
+        .filter_map(|l| l.trim_start().strip_prefix("inet "))
+        .filter_map(|rest| rest.split_whitespace().next())
+        .filter_map(|a| a.parse().ok())
+        .collect()
+}
+
+/// The first local address that falls inside one of `nets`.
+pub fn pick_bind_addr(addrs: &[IpAddr], nets: &[Net]) -> Option<IpAddr> {
+    addrs.iter().copied().find(|a| allowed(nets, *a))
 }

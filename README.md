@@ -5,8 +5,13 @@ the Mac and stream their output back over a plain TCP socket.
 
 - Runs each command with `zsh -lc` as the logged-in user, inside the GUI session, so
   `osascript`, `open`, `pbcopy`/`pbpaste`, `screencapture` and `shortcuts run` all work.
-- **No token.** The only gate is the peer address, which must fall inside
-  `AllowedNetworks`. Don't expose the port publicly.
+- **No token**, three other gates instead:
+  1. it binds **only** to the Mac's own address inside `BindNetwork` (the VPN to the
+     dedicated server), never to every interface. While the VPN is down it waits, and if
+     that address goes away it exits so launchd restarts it and rebinds;
+  2. the peer must be inside `AllowedNetworks` (the dedicated server's subnet);
+  3. **every command needs your confirmation**: a dialog on the Mac shows the peer and the
+     command with Deny / Allow. If you don't answer within `ConfirmTimeout`, it's denied.
 - One command per connection. Output is streamed as it comes, stdin can be fed at any
   time, and dropping the connection kills the command's whole process group.
 
@@ -17,11 +22,12 @@ Newline-delimited JSON on TCP port 8765.
 | dir | frame |
 |---|---|
 | → | `{"cmd":"pmset -g batt","timeout":600,"cwd":null,"shell":null}` (timeout `0` = none) |
+| ← | `{"t":"pending"}` (confirmation dialog is up on the Mac) |
 | ← | `{"t":"start","pid":123}` |
 | ← | `{"t":"out","d":"…"}` / `{"t":"err","d":"…"}` (streamed) |
 | → | `{"t":"in","d":"…"}` / `{"t":"eof"}` / `{"t":"kill"}` (any time) |
 | ← | `{"t":"exit","code":0,"signal":null,"timed_out":false,"killed":false,"duration_ms":12}` |
-| ← | `{"t":"error","message":"…"}` (forbidden, bad request, spawn failure) |
+| ← | `{"t":"error","message":"…"}` (forbidden, denied by user, bad request, spawn failure) |
 
 ```sh
 printf '{"cmd":"sw_vers"}\n{"t":"eof"}\n' | nc 10.8.0.4 8765
@@ -36,7 +42,9 @@ printf '{"cmd":"sw_vers"}\n{"t":"eof"}\n' | nc 10.8.0.4 8765
 | key | default |
 |---|---|
 | `Port` | `8765` |
-| `AllowedNetworks` | `10.168.0.0/24,127.0.0.0/8,::1` |
+| `BindNetwork` | `10.8.0.0/24` |
+| `AllowedNetworks` | `10.168.0.0/24` |
+| `ConfirmTimeout` | `60` (seconds) |
 
 Log: `/Users/Shared/mac-action-agent.log`. For protected data (Full Disk Access,
 Accessibility, Automation) grant it to `/usr/local/libexec/mac-action-agent`; releases are

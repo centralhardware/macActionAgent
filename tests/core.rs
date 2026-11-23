@@ -1,6 +1,9 @@
 use mac_action_agent::*;
 use std::io::{BufRead, BufReader, Write};
 use std::net::{TcpListener, TcpStream};
+use std::sync::Arc;
+
+fn yes() -> Arc<Confirm> { Arc::new(|_: &RunRequest, _| true) }
 
 #[test]
 fn cidr_matching() {
@@ -19,7 +22,7 @@ fn cidr_matching() {
 fn session(req: serde_json::Value, frames: &[&str]) -> Vec<AgentFrame> {
     let l = TcpListener::bind("127.0.0.1:0").unwrap();
     let addr = l.local_addr().unwrap();
-    std::thread::spawn(move || serve(l.accept().unwrap().0));
+    std::thread::spawn(move || serve(l.accept().unwrap().0, yes()));
     let mut c = TcpStream::connect(addr).unwrap();
     let mut req = req;
     req["shell"] = "/bin/sh".into();
@@ -52,7 +55,8 @@ fn exit(frames: &[AgentFrame]) -> &AgentFrame {
 #[test]
 fn streams_output_and_exit_code() {
     let f = session(serde_json::json!({"cmd": "echo hi; echo err >&2; exit 3"}), &[]);
-    assert!(matches!(f[0], AgentFrame::Start { .. }));
+    assert_eq!(f[0], AgentFrame::Pending);
+    assert!(matches!(f[1], AgentFrame::Start { .. }));
     assert_eq!(text(&f, false), "hi\n");
     assert_eq!(text(&f, true), "err\n");
     assert!(matches!(exit(&f), AgentFrame::Exit { code: Some(3), timed_out: false, .. }));
@@ -84,9 +88,39 @@ fn timeout_kills_pipeline() {
 fn bad_request() {
     let l = TcpListener::bind("127.0.0.1:0").unwrap();
     let addr = l.local_addr().unwrap();
-    std::thread::spawn(move || serve(l.accept().unwrap().0));
+    std::thread::spawn(move || serve(l.accept().unwrap().0, yes()));
     let mut c = TcpStream::connect(addr).unwrap();
     writeln!(c, "not json").unwrap();
     let line = BufReader::new(c).lines().next().unwrap().unwrap();
     assert!(matches!(serde_json::from_str(&line).unwrap(), AgentFrame::Error { .. }));
+}
+
+#[test]
+fn denied_command_never_runs() {
+    let l = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = l.local_addr().unwrap();
+    let marker = std::env::temp_dir().join(format!("maa-denied-{}", std::process::id()));
+    let _ = std::fs::remove_file(&marker);
+    std::thread::spawn(move || serve(l.accept().unwrap().0, Arc::new(|_: &RunRequest, _| false)));
+    let mut c = TcpStream::connect(addr).unwrap();
+    writeln!(c, "{}", serde_json::json!({"cmd": format!("touch {}", marker.display()), "shell": "/bin/sh"})).unwrap();
+    let frames: Vec<AgentFrame> =
+        BufReader::new(c).lines().map(|l| serde_json::from_str(&l.unwrap()).unwrap()).collect();
+    assert_eq!(frames[0], AgentFrame::Pending);
+    assert!(matches!(&frames[1], AgentFrame::Error { message } if message.contains("denied")));
+    assert_eq!(frames.len(), 2);
+    assert!(!marker.exists());
+}
+
+#[test]
+fn bind_address_from_ifconfig() {
+    let text = "lo0: flags=8049<UP,LOOPBACK>\n\tinet 127.0.0.1 netmask 0xff000000\n\tinet6 ::1 prefixlen 128\n\
+en0: flags=8863<UP>\n\tinet 192.168.1.20 netmask 0xffffff00 broadcast 192.168.1.255\n\
+utun4: flags=8051<UP,POINTOPOINT>\n\tinet 10.8.0.4 --> 10.8.0.1 netmask 0xffffff00\n";
+    let addrs = ifconfig_addrs(text);
+    assert_eq!(addrs.len(), 3);
+    let (vpn, _) = parse_nets("10.8.0.0/24");
+    assert_eq!(pick_bind_addr(&addrs, &vpn), Some("10.8.0.4".parse().unwrap()));
+    let (other, _) = parse_nets("10.9.0.0/24");
+    assert_eq!(pick_bind_addr(&addrs, &other), None);
 }
